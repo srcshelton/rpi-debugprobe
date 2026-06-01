@@ -42,6 +42,7 @@
 #include "probe.h"
 #include "cdc_uart.h"
 #include "autobaud.h"
+#include "bootsel.h"
 #include "get_serial.h"
 #include "tusb_edpt_handler.h"
 #include "DAP.h"
@@ -119,6 +120,7 @@ void usb_thread(void *ptr)
     wake = xTaskGetTickCount();
     do {
         tud_task();
+        bootsel_task();
 #ifdef PROBE_USB_CONNECTED_LED
         if (!gpio_get(PROBE_USB_CONNECTED_LED) && tud_ready())
             gpio_put(PROBE_USB_CONNECTED_LED, 1);

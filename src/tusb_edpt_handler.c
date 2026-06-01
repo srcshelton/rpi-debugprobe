@@ -6,6 +6,7 @@
 
 #include "tusb_edpt_handler.h"
 #include "DAP.h"
+#include "bootsel.h"
 #include "semphr.h"
 
 
@@ -290,7 +291,15 @@ usbd_class_driver_t const _dap_edpt_driver =
 // Add the custom driver to the tinyUSB stack
 usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count)
 {
+#if DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE
+	static usbd_class_driver_t drivers[2];
+
+	drivers[0] = _dap_edpt_driver;
+	drivers[1] = bootsel_reset_driver;
+	*driver_count = 2;
+	return drivers;
+#else
 	*driver_count = 1;
 	return &_dap_edpt_driver;
+#endif
 }
-

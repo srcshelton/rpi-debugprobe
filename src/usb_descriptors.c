@@ -28,6 +28,7 @@
 #include "tusb.h"
 #include "get_serial.h"
 #include "probe_config.h"
+#include "bootsel.h"
 
 //--------------------------------------------------------------------+
 // Device Descriptors
@@ -71,6 +72,9 @@ enum
   ITF_NUM_PROBE, // Old versions of Keil MDK only look at interface 0
   ITF_NUM_CDC_COM,
   ITF_NUM_CDC_DATA,
+#if DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE
+  ITF_NUM_RESET,
+#endif
   ITF_NUM_TOTAL
 };
 
@@ -80,11 +84,24 @@ enum
 #define DAP_OUT_EP_NUM 0x04
 #define DAP_IN_EP_NUM 0x85
 
-#if (PROBE_DEBUG_PROTOCOL == PROTO_DAP_V1)
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_HID_INOUT_DESC_LEN)
+#define TUD_DEBUGPROBE_RESET_DESC_LEN 9
+#define TUD_DEBUGPROBE_RESET_DESCRIPTOR(_itfnum, _stridx) \
+  9, TUSB_DESC_INTERFACE, _itfnum, 0, 0, TUSB_CLASS_VENDOR_SPECIFIC, DEBUGPROBE_RESET_INTERFACE_SUBCLASS, DEBUGPROBE_RESET_INTERFACE_PROTOCOL, _stridx
+
+#if DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE
+#define RESET_DESC_LEN TUD_DEBUGPROBE_RESET_DESC_LEN
 #else
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN)
+#define RESET_DESC_LEN 0
 #endif
+
+#if (PROBE_DEBUG_PROTOCOL == PROTO_DAP_V1)
+#define DAP_DESC_LEN TUD_HID_INOUT_DESC_LEN
+#else
+#define DAP_DESC_LEN TUD_VENDOR_DESC_LEN
+#endif
+
+#define CDC_DESC_OFFSET  (TUD_CONFIG_DESC_LEN + DAP_DESC_LEN)
+#define CONFIG_TOTAL_LEN (CDC_DESC_OFFSET + TUD_CDC_DESC_LEN + RESET_DESC_LEN)
 
 static uint8_t const desc_hid_report[] =
 {
@@ -113,6 +130,10 @@ uint8_t desc_configuration[] =
 #endif
   // Interface 1 + 2
   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_COM, 6, CDC_NOTIFICATION_EP_NUM, 64, CDC_DATA_OUT_EP_NUM, CDC_DATA_IN_EP_NUM, 64),
+#if DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE
+  // Interface 3
+  TUD_DEBUGPROBE_RESET_DESCRIPTOR(ITF_NUM_RESET, 7),
+#endif
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
@@ -122,7 +143,7 @@ uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
 {
   (void) index; // for multiple configurations
   /* Hack in CAP_BREAK support */
-  desc_configuration[CONFIG_TOTAL_LEN - TUD_CDC_DESC_LEN + 8 + 9 + 5 + 5 + 4 - 1] = 0x6;
+  desc_configuration[CDC_DESC_OFFSET + 8 + 9 + 5 + 5 + 4 - 1] = 0x6;
   return desc_configuration;
 }
 
@@ -140,6 +161,9 @@ char const* string_desc_arr [] =
   "CMSIS-DAP v1 Interface", // 4: Interface descriptor for HID transport
   "CMSIS-DAP v2 Interface", // 5: Interface descriptor for Bulk transport
   "CDC-ACM UART Interface", // 6: Interface descriptor for CDC
+#if DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE
+  "Raspberry Pi Reset Interface", // 7: Interface descriptor for reset control
+#endif
 };
 
 static uint16_t _desc_str[32];
@@ -198,7 +222,22 @@ will insert "DeviceInterfaceGUIDs" multistring property.
 https://developers.google.com/web/fundamentals/native-hardware/build-for-webusb/
 (Section Microsoft OS compatibility descriptors)
 */
+#define MS_OS_20_SET_HEADER_DESC_LEN 0x0A
+#define MS_OS_20_CONFIG_SUBSET_HEADER_DESC_LEN 0x08
+#define MS_OS_20_FUNCTION_SUBSET_HEADER_DESC_LEN 0x08
+#define MS_OS_20_COMPATIBLE_ID_DESC_LEN 0x14
+#define MS_OS_20_PROBE_REG_PROPERTY_DESC_LEN 0x84
+#define MS_OS_20_PROBE_FUNCTION_DESC_LEN \
+  (MS_OS_20_FUNCTION_SUBSET_HEADER_DESC_LEN + MS_OS_20_COMPATIBLE_ID_DESC_LEN + MS_OS_20_PROBE_REG_PROPERTY_DESC_LEN)
+#if DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE
+#define MS_OS_20_RESET_REG_PROPERTY_DESC_LEN 0x80
+#define MS_OS_20_RESET_FUNCTION_DESC_LEN \
+  (MS_OS_20_FUNCTION_SUBSET_HEADER_DESC_LEN + MS_OS_20_COMPATIBLE_ID_DESC_LEN + MS_OS_20_RESET_REG_PROPERTY_DESC_LEN)
+#define MS_OS_20_DESC_LEN \
+  (MS_OS_20_SET_HEADER_DESC_LEN + MS_OS_20_CONFIG_SUBSET_HEADER_DESC_LEN + MS_OS_20_PROBE_FUNCTION_DESC_LEN + MS_OS_20_RESET_FUNCTION_DESC_LEN)
+#else
 #define MS_OS_20_DESC_LEN  0xB2
+#endif
 
 #define BOS_TOTAL_LEN      (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 
@@ -220,14 +259,14 @@ uint8_t const desc_ms_os_20[] =
   U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION), 0, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A),
 
   // Function Subset header: length, type, first interface, reserved, subset length
-  U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION), ITF_NUM_PROBE, 0, U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A-0x08),
+  U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION), ITF_NUM_PROBE, 0, U16_TO_U8S_LE(MS_OS_20_PROBE_FUNCTION_DESC_LEN),
 
   // MS OS 2.0 Compatible ID descriptor: length, type, compatible ID, sub compatible ID
   U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID), 'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sub-compatible
 
   // MS OS 2.0 Registry property descriptor: length, type
-  U16_TO_U8S_LE(MS_OS_20_DESC_LEN-0x0A-0x08-0x08-0x14), U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+  U16_TO_U8S_LE(MS_OS_20_PROBE_REG_PROPERTY_DESC_LEN), U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
   U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A), // wPropertyDataType, wPropertyNameLength and PropertyName "DeviceInterfaceGUIDs\0" in UTF-16
   'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00, 'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
   'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00, 'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00, 0x00, 0x00,
@@ -237,6 +276,27 @@ uint8_t const desc_ms_os_20[] =
   '2', 0x00, '9', 0x00, '3', 0x00, 'B', 0x00, '-', 0x00, '4', 0x00, '6', 0x00, '6', 0x00, '3', 0x00, '-', 0x00,
   'A', 0x00, 'A', 0x00, '3', 0x00, '6', 0x00, '-', 0x00, '1', 0x00, 'A', 0x00, 'A', 0x00, 'E', 0x00, '4', 0x00,
   '6', 0x00, '4', 0x00, '6', 0x00, '3', 0x00, '7', 0x00, '7', 0x00, '6', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00
+#if DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE
+  ,
+  // Function Subset header: length, type, first interface, reserved, subset length
+  U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION), ITF_NUM_RESET, 0, U16_TO_U8S_LE(MS_OS_20_RESET_FUNCTION_DESC_LEN),
+
+  // MS OS 2.0 Compatible ID descriptor: length, type, compatible ID, sub compatible ID
+  U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID), 'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // sub-compatible
+
+  // MS OS 2.0 Registry property descriptor: length, type
+  U16_TO_U8S_LE(MS_OS_20_RESET_REG_PROPERTY_DESC_LEN), U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+  U16_TO_U8S_LE(0x0001), U16_TO_U8S_LE(0x0028), // wPropertyDataType, wPropertyNameLength and PropertyName "DeviceInterfaceGUID\0" in UTF-16
+  'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00, 'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
+  'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00, 'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 0x00, 0x00,
+  U16_TO_U8S_LE(0x004E),
+  // bPropertyData "{bc7398c1-73cd-4cb7-98b8-913a8fca7bf6}" as a UTF-16 string
+  '{', 0x00, 'b', 0x00, 'c', 0x00, '7', 0x00, '3', 0x00, '9', 0x00, '8', 0x00, 'c', 0x00, '1', 0x00, '-', 0x00,
+  '7', 0x00, '3', 0x00, 'c', 0x00, 'd', 0x00, '-', 0x00, '4', 0x00, 'c', 0x00, 'b', 0x00, '7', 0x00, '-', 0x00,
+  '9', 0x00, '8', 0x00, 'b', 0x00, '8', 0x00, '-', 0x00, '9', 0x00, '1', 0x00, '3', 0x00, 'a', 0x00, '8', 0x00,
+  'f', 0x00, 'c', 0x00, 'a', 0x00, '7', 0x00, 'b', 0x00, 'f', 0x00, '6', 0x00, '}', 0x00, 0x00, 0x00
+#endif
 };
 
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "Incorrect size");

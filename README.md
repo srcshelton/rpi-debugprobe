@@ -65,6 +65,35 @@ cmake -DDEBUG_ON_PICO=1 -DPICO_BOARD=pico2 ../
 ```
 This will build with the configuration for the Pico 2 and call the output program `debugprobe_on_pico2.uf2`.
 
+# Optional BOOTSEL reset controls
+
+The default build does not enable any software BOOTSEL reset control. You can
+enable either or both of the following CMake options:
+
+- `DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK`: enable a two-step baud-rate sequence on
+  the CDC UART interface. The default sequence is `9729`, then `9727` within one
+  second, with no other baud rate selected in between.
+- `DEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE`: add the Pico SDK-compatible USB
+  reset interface used by tools such as `picotool reboot -f -u`.
+
+For example:
+```
+cmake -DDEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK=ON ..
+cmake -DDEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE=ON ..
+cmake -DDEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK=ON -DDEBUGPROBE_ENABLE_BOOTSEL_RESET_INTERFACE=ON ..
+```
+
+The baud-rate knock values and timeout can be overridden at build time:
+```
+cmake -DDEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK=ON \
+      -DDEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD=12345 \
+      -DDEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD=23456 \
+      -DDEBUGPROBE_BOOTSEL_KNOCK_TIMEOUT_MS=1500 ..
+```
+The two baud rates must be non-negative, distinct, and must not use the AutoBaud
+control rate `9728`; this allows `0` to be used deliberately as an invalid-baud
+knock value if desired.
+
 # AutoBaud
 
 Mode which automatically detects and sets the UART baud rate as data arrives.
@@ -76,4 +105,3 @@ To enable AutoBaud, configure the USB CDC port to the following custom baud rate
 > **Note:** Some Linux serial tools cannot set custom baud values. PuTTY on Windows and any terminal that supports arbitrary baud rates works.
 
 Changing the baud rate to any other value disables AutoBaud.
-

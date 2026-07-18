@@ -16,6 +16,8 @@ Debug Probe documentation can be found at the [Raspberry Pi documentation](https
 
 For the purpose of making changes or studying of the code, you may want to compile the code yourself.
 
+Building Debug Probe requires Pico SDK 2.3.0 or newer.
+
 First, clone the repository:
 ```bash
 git clone https://github.com/raspberrypi/debugprobe
@@ -59,7 +61,7 @@ Note that if you first ran through the whole sequence to compile for the Debug P
 If using an existing debugprobe clone:
 - You must completely regenerate your build directory, or use a different one.
 - You must also sync and update submodules.
-- `PICO_SDK_PATH` must point to a version 2.0.0 or greater install.
+- `PICO_SDK_PATH` must point to a version 2.3.0 or newer install.
 
 ```bash
 git submodule sync
@@ -82,4 +84,3 @@ To enable AutoBaud, configure the USB CDC port to the following custom baud rate
 > **Note:** Some Linux serial tools cannot set custom baud values. PuTTY on Windows and any terminal that supports arbitrary baud rates works.
 
 Changing the baud rate to any other value disables AutoBaud.
-

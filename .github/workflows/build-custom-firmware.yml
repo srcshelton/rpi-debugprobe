@@ -16,14 +16,14 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
 
       - name: Check out Pico SDK
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: raspberrypi/pico-sdk
           ref: ${{ env.PICO_SDK_VERSION }}
@@ -90,7 +90,7 @@ jobs:
           cp build/debugprobe.uf2 "dist/${{ steps.version.outputs.artifact_stem }}.uf2"
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.version.outputs.artifact_stem }}
           path: dist/*.uf2

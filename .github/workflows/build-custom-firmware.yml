@@ -1,0 +1,129 @@
+name: Build custom firmware
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PICO_SDK_VERSION: "2.3.0"
+
+jobs:
+  build:
+    name: Build UF2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+
+      - name: Check out Pico SDK
+        uses: actions/checkout@v4
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: ${{ env.PICO_SDK_VERSION }}
+          path: pico-sdk
+          submodules: recursive
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            ca-certificates \
+            cmake \
+            gcc-arm-none-eabi \
+            git \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib \
+            make \
+            python3
+
+      - name: Derive firmware version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_tag="$(git tag --merged HEAD --sort=-v:refname --list 'debugprobe-v*' | head -n 1)"
+          if [[ -n "${base_tag}" ]]; then
+            base_version="${base_tag#debugprobe-}"
+            source_ref="${base_tag}"
+          else
+            release_subject="$(git log --format=%s --grep='^Debugprobe v[0-9]' -n 1)"
+            if [[ -n "${release_subject}" ]]; then
+              base_version="${release_subject#Debugprobe }"
+              source_ref="${release_subject}"
+            else
+              base_version="git-$(git rev-parse --short HEAD)"
+              source_ref="HEAD"
+            fi
+          fi
+
+          artifact_stem="debugprobe-${base_version}-remote-upgrade"
+          release_tag="remote-upgrade-${base_version}"
+
+          {
+            echo "base_version=${base_version}"
+            echo "source_ref=${source_ref}"
+            echo "artifact_stem=${artifact_stem}"
+            echo "release_tag=${release_tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Configure firmware
+        run: |
+          cmake -S . -B build \
+            -DPICO_SDK_PATH="${GITHUB_WORKSPACE}/pico-sdk" \
+            -DDEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK=ON
+
+      - name: Build firmware
+        run: cmake --build build --parallel
+
+      - name: Package UF2
+        run: |
+          mkdir -p dist
+          cp build/debugprobe.uf2 "dist/${{ steps.version.outputs.artifact_stem }}.uf2"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.artifact_stem }}
+          path: dist/*.uf2
+          if-no-files-found: error
+
+      - name: Write release notes
+        run: |
+          cat > "${RUNNER_TEMP}/release-notes.md" <<EOF
+          Automated custom firmware build for Raspberry Pi Debug Probe ${{ steps.version.outputs.base_version }}.
+
+          Source base: ${{ steps.version.outputs.source_ref }}
+          Source commit: $GITHUB_SHA
+          Pico SDK: ${{ env.PICO_SDK_VERSION }}
+          Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          Build options:
+          - DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK=ON
+          EOF
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+          RELEASE_TITLE: Debug Probe ${{ steps.version.outputs.base_version }} remote-upgrade firmware
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release edit "${RELEASE_TAG}" \
+              --title "${RELEASE_TITLE}" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md"
+            gh release upload "${RELEASE_TAG}" dist/*.uf2 --clobber
+          else
+            gh release create "${RELEASE_TAG}" dist/*.uf2 \
+              --target "${GITHUB_SHA}" \
+              --title "${RELEASE_TITLE}" \
+              --notes-file "${RUNNER_TEMP}/release-notes.md"
+          fi

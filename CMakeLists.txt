@@ -22,6 +22,7 @@ add_executable(debugprobe
         src/probe.c
         src/cdc_uart.c
         src/get_serial.c
+        src/bootsel.c
         src/sw_dp_pio.c
         src/tusb_edpt_handler.c
         src/autobaud.c
@@ -61,9 +62,42 @@ target_include_directories(debugprobe PRIVATE
 
 add_dependencies(debugprobe version)
 
+option (DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK "Enable the USB CDC baud-rate knock sequence for rebooting into BOOTSEL" OFF)
+set (DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD "9729" CACHE STRING "First baud rate in the BOOTSEL knock sequence")
+set (DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD "9727" CACHE STRING "Second baud rate in the BOOTSEL knock sequence")
+set (DEBUGPROBE_BOOTSEL_KNOCK_TIMEOUT_MS "1000" CACHE STRING "Maximum delay between BOOTSEL knock baud-rate changes")
+
+if (DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK)
+    if (DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD LESS 0)
+        message(SEND_ERROR "DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD must not be negative")
+    endif ()
+    if (DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD LESS 0)
+        message(SEND_ERROR "DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD must not be negative")
+    endif ()
+    if (DEBUGPROBE_BOOTSEL_KNOCK_TIMEOUT_MS LESS_EQUAL 0)
+        message(SEND_ERROR "DEBUGPROBE_BOOTSEL_KNOCK_TIMEOUT_MS must be greater than zero")
+    endif ()
+    if (DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD STREQUAL DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD)
+        message(SEND_ERROR "DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD and DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD must differ")
+    endif ()
+    if (DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD STREQUAL "9728")
+        message(SEND_ERROR "DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD conflicts with the AutoBaud control rate 9728")
+    endif ()
+    if (DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD STREQUAL "9728")
+        message(SEND_ERROR "DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD conflicts with the AutoBaud control rate 9728")
+    endif ()
+    set (DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK_VALUE 1)
+else ()
+    set (DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK_VALUE 0)
+endif ()
+
 target_compile_definitions (debugprobe PRIVATE
 	PICO_RP2040_USB_DEVICE_ENUMERATION_FIX=1
     PICO_ENABLE_USB_RESET_VIA_VENDOR_INTERFACE=1
+	DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK=${DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK_VALUE}
+	DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD=${DEBUGPROBE_BOOTSEL_KNOCK_ARM_BAUD}
+	DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD=${DEBUGPROBE_BOOTSEL_KNOCK_TRIGGER_BAUD}
+	DEBUGPROBE_BOOTSEL_KNOCK_TIMEOUT_MS=${DEBUGPROBE_BOOTSEL_KNOCK_TIMEOUT_MS}
 )
 
 option (DEBUG_ON_PICO "Compile firmware for the Pico instead of Debug Probe" OFF)
@@ -99,6 +133,10 @@ target_link_libraries(debugprobe PRIVATE
         FreeRTOS-Kernel
         FreeRTOS-Kernel-Heap1
 )
+
+if (DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK)
+    target_link_libraries(debugprobe PRIVATE pico_bootrom)
+endif ()
 
 pico_set_binary_type(debugprobe copy_to_ram)
 

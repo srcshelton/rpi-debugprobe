@@ -28,6 +28,7 @@
 #include "task.h"
 #include "tusb.h"
 #include "autobaud.h"
+#include "bootsel.h"
 
 #include "probe_config.h"
 
@@ -221,6 +222,12 @@ void cdc_thread(void *ptr)
 
 void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const* line_coding)
 {
+  if (bootsel_handle_baudrate(line_coding->bit_rate)) {
+    if (autobaud_running)
+      autobaud_wait_stop();
+    return;
+  }
+
   if (line_coding->bit_rate == MAGIC_BAUD) {
     if (!autobaud_running)
       autobaud_start();

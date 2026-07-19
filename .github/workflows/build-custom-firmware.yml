@@ -1,13 +1,20 @@
 name: Build custom firmware
+run-name: Build ${{ github.ref_name }}
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "remote-upgrade-v*"
 
 permissions:
   contents: write
 
 env:
   PICO_SDK_VERSION: "2.3.0"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -21,6 +28,53 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
+
+      - name: Derive release metadata
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]] ||
+             [[ ! "${release_tag}" =~ ^remote-upgrade-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+            echo "::error::Unsupported release tag ${release_tag}"
+            exit 1
+          fi
+
+          release_version="${release_tag#remote-upgrade-}"
+          source_commit="$(git rev-parse HEAD)"
+          base_tag="$(git tag --merged HEAD --sort=-v:refname --list 'debugprobe-v*' | head -n 1)"
+          if [[ -n "${base_tag}" ]]; then
+            source_base="${base_tag}"
+          else
+            release_subject="$(git log --format=%s --grep='^Debugprobe v[0-9]' -n 1)"
+            if [[ -n "${release_subject}" ]]; then
+              source_base="${release_subject}"
+            else
+              source_base="HEAD"
+            fi
+          fi
+
+          artifact_stem="debugprobe-${release_version}-remote-upgrade"
+
+          {
+            echo "release_version=${release_version}"
+            echo "source_base=${source_base}"
+            echo "source_commit=${source_commit}"
+            echo "artifact_stem=${artifact_stem}"
+            echo "release_tag=${release_tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Ensure Release does not exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "::error::Release ${RELEASE_TAG} already exists"
+            exit 1
+          fi
 
       - name: Check out Pico SDK
         uses: actions/checkout@v7
@@ -43,37 +97,6 @@ jobs:
             libstdc++-arm-none-eabi-newlib \
             make \
             python3
-
-      - name: Derive firmware version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          base_tag="$(git tag --merged HEAD --sort=-v:refname --list 'debugprobe-v*' | head -n 1)"
-          if [[ -n "${base_tag}" ]]; then
-            base_version="${base_tag#debugprobe-}"
-            source_ref="${base_tag}"
-          else
-            release_subject="$(git log --format=%s --grep='^Debugprobe v[0-9]' -n 1)"
-            if [[ -n "${release_subject}" ]]; then
-              base_version="${release_subject#Debugprobe }"
-              source_ref="${release_subject}"
-            else
-              base_version="git-$(git rev-parse --short HEAD)"
-              source_ref="HEAD"
-            fi
-          fi
-
-          artifact_stem="debugprobe-${base_version}-remote-upgrade"
-          release_tag="remote-upgrade-${base_version}"
-
-          {
-            echo "base_version=${base_version}"
-            echo "source_ref=${source_ref}"
-            echo "artifact_stem=${artifact_stem}"
-            echo "release_tag=${release_tag}"
-          } >> "${GITHUB_OUTPUT}"
 
       - name: Configure firmware
         run: |
@@ -99,10 +122,11 @@ jobs:
       - name: Write release notes
         run: |
           cat > "${RUNNER_TEMP}/release-notes.md" <<EOF
-          Automated custom firmware build for Raspberry Pi Debug Probe ${{ steps.version.outputs.base_version }}.
+          Automated custom firmware build for Raspberry Pi Debug Probe ${{ steps.version.outputs.release_version }}.
 
-          Source base: ${{ steps.version.outputs.source_ref }}
-          Source commit: $GITHUB_SHA
+          Source tag: ${{ steps.version.outputs.release_tag }}
+          Source base: ${{ steps.version.outputs.source_base }}
+          Source commit: ${{ steps.version.outputs.source_commit }}
           Pico SDK: ${{ env.PICO_SDK_VERSION }}
           Workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
 
@@ -110,20 +134,21 @@ jobs:
           - DEBUGPROBE_ENABLE_BOOTSEL_BAUD_KNOCK=ON
           EOF
 
-      - name: Create or update release
+      - name: Create Release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
-          RELEASE_TITLE: Debug Probe ${{ steps.version.outputs.base_version }} remote-upgrade firmware
+          RELEASE_TITLE: Debug Probe ${{ steps.version.outputs.release_version }} remote-upgrade firmware
+          SOURCE_COMMIT: ${{ steps.version.outputs.source_commit }}
         run: |
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release edit "${RELEASE_TAG}" \
-              --title "${RELEASE_TITLE}" \
-              --notes-file "${RUNNER_TEMP}/release-notes.md"
-            gh release upload "${RELEASE_TAG}" dist/*.uf2 --clobber
-          else
-            gh release create "${RELEASE_TAG}" dist/*.uf2 \
-              --target "${GITHUB_SHA}" \
-              --title "${RELEASE_TITLE}" \
-              --notes-file "${RUNNER_TEMP}/release-notes.md"
+          tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          if [[ "${tag_commit}" != "${SOURCE_COMMIT}" ]]; then
+            echo "::error::Tag ${RELEASE_TAG} resolves to ${tag_commit}, expected ${SOURCE_COMMIT}"
+            exit 1
           fi
+
+          gh release create "${RELEASE_TAG}" dist/*.uf2 \
+            --verify-tag \
+            --target "${SOURCE_COMMIT}" \
+            --title "${RELEASE_TITLE}" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md"

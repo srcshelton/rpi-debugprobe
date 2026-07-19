@@ -16,14 +16,14 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
 
       - name: Check out Pico SDK
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: raspberrypi/pico-sdk
           ref: ${{ env.PICO_SDK_VERSION }}
